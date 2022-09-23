@@ -28,7 +28,18 @@ import freechips.rocketchip.tile
 import FUConstants._
 import boom.common._
 import boom.ifu.{GetPCFromFtqIO}
-import boom.util.{ImmGen, IsKilledByBranch, BranchKillableQueue, BoomCoreStringPrefix}
+import boom.util.{ImmGen, IsKilledByBranch, BranchKillableQueue, BoomCoreStringPrefix, Queue}
+
+//edited
+import boom.util.IsOlder
+import boom.util.GetNewBrMask
+import boom.common.{MicroOp}
+import boom.exu.{BrUpdateInfo}
+//import freechips.rocketchip.config.Parameters
+//import boom.common.HasBoomCoreParameters
+//import boom.parameters.robAddrSz
+///import/lab/users/boos/chipyard/generators/riscv-boom-lb/src/main/scala/common/parameters.scala
+//edited
 
 /**
  * Response from Execution Unit. Bundles a MicroOp with data
@@ -560,4 +571,172 @@ class FPUExeUnit(
   }
 
   override def toString: String = out_str.toString
+}
+
+
+
+/** -----------------------------------------------------------Edited-------------------------------------------------*/
+
+
+
+/** IO bundle definition for an Arbiter, which takes some number of ready-valid inputs and outputs
+ * (selects) at most one.
+ * @groupdesc Signals The actual hardware fields of the Bundle
+ *
+ * @param gen data type
+ * @param n number of inputs
+ */
+class ArbiterIOVar[T <: Data](private val gen: T, val n: Int) (implicit p: Parameters) extends Bundle {
+  // See github.com/freechipsproject/chisel3/issues/765 for why gen is a private val and proposed replacement APIs.
+
+  /** Input data, one per potential sender
+   *
+   * @group Signals
+   */
+  val in = Flipped(Vec(n, Decoupled(gen)))
+
+  /** Output data after arbitration
+   *
+   * @group Signals
+   */
+  val out = Decoupled(gen)
+
+  /** One-Hot vector indicating which output was chosen
+   *
+   * @group Signals
+   */
+  val chosen = Output(UInt(log2Ceil(n).W))
+  //edited
+  val rob_head = Input(UInt(32.W))
+
+  val brupdate = Input(new BrUpdateInfo())
+  //val brupdate  = Wire(new BrUpdateInfo)
+
+  val kill = Input(Bool())
+}
+
+
+/**
+ *Arbiter with variable time execution
+ *edited default case in Arbiterctl
+ */
+class ArbiterVarTime[T <: Data](val gen: ExeUnitResp, val n: Int) (implicit p: Parameters) extends Module {
+  val io = IO(new ArbiterIOVar(gen, n))
+
+  io.chosen := (n - 1).asUInt
+
+  //set all input.ready to true
+  for (i <- 0 to n-1 by +1){
+    io.in(i).ready := true.B
+  }
+
+  // set bool depending on signal from queue or input is chosen
+  val qout = WireInit(false.B)
+
+  val uint = 0.U
+  //seq that is delivered to grant
+  val returngrant = VecInit(Seq.fill(n){false.B})
+  //save index of oldest signal
+  //val oldest = Reg(UInt())
+  val oldest = Wire(UInt())
+  oldest := 0.U
+  //oldest := PriorityEncoder(io.in.map(_.valid))
+
+  io.out.bits := io.in(oldest).bits
+  io.out.valid := false.B
+
+  //#############################################################################Queue
+
+  //length of queue
+  val count = 64
+  //create queue
+  val queue = Module(new Queue(gen, entries = count, n))
+
+  queue.io.rob_head := io.rob_head
+
+  val in_valid = WireInit(VecInit(Seq.fill(n) {false.B}))
+  val in_bitsUop = WireInit(VecInit(Seq.fill(n) {NullMicroOp}))
+  val in_bitsData = WireInit(VecInit(Seq.fill(n) {0.U}))
+
+  queue.io.brupdate := io.brupdate
+  queue.io.deq.ready := false.B
+
+  for(i <- 0 to n-1 by +1) {
+    queue.io.enq(i).valid := in_valid(i)
+    queue.io.enq(i).bits.uop := in_bitsUop(i)
+    queue.io.enq(i).bits.data := in_bitsData(i)
+    queue.io.enq(i).bits.predicated := io.in(0).bits.predicated
+    queue.io.enq(i).bits.fflags := io.in(0).bits.fflags
+  }
+
+  //queue.io.brupdate := io.brupdate
+  queue.io.flush := io.kill
+
+  //io.out <> queue.io.deq // muss noch geaendert werden
+
+//find oldest input signal
+  when(io.in(0).valid){
+    when(io.in(1).valid) {
+      when(IsOlder(io.in(0).bits.uop.rob_idx, io.in(1).bits.uop.rob_idx, io.rob_head)) {
+        //put old oldest into queue
+        in_valid(1) := io.in(1).valid
+        in_bitsUop(1) := io.in(1).bits.uop
+        in_bitsData(1) := io.in(1).bits.data
+        //index of new oldest
+        oldest := 0.U
+      }.otherwise {
+          //put i into queue
+          in_valid(0) := io.in(0).valid
+          in_bitsUop(0) := io.in(0).bits.uop
+          in_bitsData(0) := io.in(0).bits.data
+          //index of new oldest
+          oldest := 1.U
+        }
+    }
+    oldest := 0.U
+  }.otherwise{
+      when(io.in(1).valid) {
+        oldest := 1.U
+      }
+  }
+
+  //compare oldest input signal to oldest of queue
+  when(queue.io.deq.valid){
+    when(IsOlder(queue.io.deq.bits.uop.rob_idx, io.in(oldest).bits.uop.rob_idx, io.rob_head)){
+      qout := true.B
+      //put old oldest into queue
+      in_valid(oldest)      := io.in(oldest).valid
+      in_bitsUop(oldest)    := io.in(oldest).bits.uop
+      in_bitsData(oldest)   := io.in(oldest).bits.data
+      queue.io.deq.ready := true.B
+      io.out.bits := queue.io.deq.bits
+    }
+  }
+
+  val arbiterCtl = io.in.map(_.valid).length match{
+    case 0 => Seq()
+    case 1 => Seq(true.B)
+    case _ => returngrant //returnseq
+  }
+
+  val grant = arbiterCtl
+
+  //oldest is an input signal
+  when(!qout){
+    //io.out.valid := !grant.last || io.in.last.valid
+    //io.out.valid := (io.in.map(_.valid)).asUInt =/= 0.U
+    io.out.valid := false.B
+    for(i <-0 to n-1 by +1){
+      when(io.in(i).valid){
+        io.out.valid := true.B
+      }
+    }
+    io.chosen := oldest
+    io.out.bits := io.in(oldest).bits
+  }
+  //oldest is output of queue
+  .otherwise{
+    io.out.valid := queue.io.deq.valid //io.deq.bits.uop.valid
+    io.out.bits := queue.io.deq.bits
+  }
 }

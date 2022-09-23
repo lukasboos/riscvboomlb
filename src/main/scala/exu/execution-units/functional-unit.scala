@@ -128,6 +128,8 @@ class BrResolutionInfo(implicit p: Parameters) extends BoomBundle
   val pc_sel     = UInt(2.W)
 
   val jalr_target = UInt(vaddrBitsExtended.W)
+  //val target_offset = SInt()
+  //edited
   val target_offset = SInt()
 }
 

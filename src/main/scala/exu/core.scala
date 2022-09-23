@@ -126,9 +126,12 @@ class BoomCore(usingTrace: Boolean)(implicit p: Parameters) extends BoomModule
 
   // wb arbiter for the 0th ll writeback
   // TODO: should this be a multi-arb?
-  val ll_wbarb         = Module(new Arbiter(new ExeUnitResp(xLen), 1 +
+  val ll_wbarb         = Module(new ArbiterVarTime(new ExeUnitResp(xLen), 1 +
                                                                    (if (usingFPU) 1 else 0) +
                                                                    (if (usingRoCC) 1 else 0)))
+  //val ll_wbarb         = Module(new Arbiter(new ExeUnitResp(xLen), 1 +
+  //                                                                 (if (usingFPU) 1 else 0) +
+  //                                                                 (if (usingRoCC) 1 else 0)))
   val iregister_read   = Module(new RegisterRead(
                            issue_units.map(_.issueWidth).sum,
                            exe_units.withFilter(_.readsIrf).map(_.supportedFuncUnits),
@@ -515,6 +518,7 @@ class BoomCore(usingTrace: Boolean)(implicit p: Parameters) extends BoomModule
 
   val jmp_pc_req  = Wire(Decoupled(UInt(log2Ceil(ftqSz).W)))
   val xcpt_pc_req = Wire(Decoupled(UInt(log2Ceil(ftqSz).W)))
+
   val flush_pc_req = Wire(Decoupled(UInt(log2Ceil(ftqSz).W)))
 
   val ftq_arb = Module(new Arbiter(UInt(log2Ceil(ftqSz).W), 3))
@@ -1133,7 +1137,12 @@ class BoomCore(usingTrace: Boolean)(implicit p: Parameters) extends BoomModule
   var w_cnt = 1
   iregfile.io.write_ports(0) := WritePort(ll_wbarb.io.out, ipregSz, xLen, RT_FIX)
   ll_wbarb.io.in(0) <> mem_resps(0)
-  assert (ll_wbarb.io.in(0).ready) // never backpressure the memory unit.
+  //edited
+  ll_wbarb.io.rob_head := rob.io.rob_head_idx
+  ll_wbarb.io.brupdate := brupdate
+  ll_wbarb.io.kill := RegNext(rob.io.flush.valid)
+  //edited
+  //assert (ll_wbarb.io.in(0).ready) // never backpressure the memory unit.
   for (i <- 1 until memWidth) {
     iregfile.io.write_ports(w_cnt) := WritePort(mem_resps(i), ipregSz, xLen, RT_FIX)
     w_cnt += 1
