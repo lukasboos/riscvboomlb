@@ -578,7 +578,6 @@ class FPUExeUnit(
 /** -----------------------------------------------------------Edited-------------------------------------------------*/
 
 
-
 /** IO bundle definition for an Arbiter, which takes some number of ready-valid inputs and outputs
  * (selects) at most one.
  * @groupdesc Signals The actual hardware fields of the Bundle
@@ -606,11 +605,11 @@ class ArbiterIOVar[T <: Data](private val gen: T, val n: Int) (implicit p: Param
    * @group Signals
    */
   val chosen = Output(UInt(log2Ceil(n).W))
-  //edited
+
+
   val rob_head = Input(UInt(32.W))
 
   val brupdate = Input(new BrUpdateInfo())
-  //val brupdate  = Wire(new BrUpdateInfo)
 
   val kill = Input(Bool())
 }
@@ -637,29 +636,28 @@ class ArbiterVarTime[T <: Data](val gen: ExeUnitResp, val n: Int) (implicit p: P
   //seq that is delivered to grant
   val returngrant = VecInit(Seq.fill(n){false.B})
   //save index of oldest signal
-  //val oldest = Reg(UInt())
   val oldest = Wire(UInt())
   oldest := 0.U
-  //oldest := PriorityEncoder(io.in.map(_.valid))
 
   io.out.bits := io.in(oldest).bits
   io.out.valid := false.B
 
-  //#############################################################################Queue
+
 
   //length of queue
   val count = 64
   //create queue
   val queue = Module(new Queue(gen, entries = count, n))
 
-  queue.io.rob_head := io.rob_head
-
+  //set signals
   val in_valid = WireInit(VecInit(Seq.fill(n) {false.B}))
   val in_bitsUop = WireInit(VecInit(Seq.fill(n) {NullMicroOp}))
   val in_bitsData = WireInit(VecInit(Seq.fill(n) {0.U}))
 
   queue.io.brupdate := io.brupdate
   queue.io.deq.ready := false.B
+  queue.io.flush := io.kill
+  queue.io.rob_head := io.rob_head
 
   for(i <- 0 to n-1 by +1) {
     queue.io.enq(i).valid := in_valid(i)
@@ -669,10 +667,6 @@ class ArbiterVarTime[T <: Data](val gen: ExeUnitResp, val n: Int) (implicit p: P
     queue.io.enq(i).bits.fflags := io.in(0).bits.fflags
   }
 
-  //queue.io.brupdate := io.brupdate
-  queue.io.flush := io.kill
-
-  //io.out <> queue.io.deq // muss noch geaendert werden
 
 //find oldest input signal
   when(io.in(0).valid){
@@ -713,18 +707,8 @@ class ArbiterVarTime[T <: Data](val gen: ExeUnitResp, val n: Int) (implicit p: P
     }
   }
 
-  val arbiterCtl = io.in.map(_.valid).length match{
-    case 0 => Seq()
-    case 1 => Seq(true.B)
-    case _ => returngrant //returnseq
-  }
-
-  val grant = arbiterCtl
-
   //oldest is an input signal
   when(!qout){
-    //io.out.valid := !grant.last || io.in.last.valid
-    //io.out.valid := (io.in.map(_.valid)).asUInt =/= 0.U
     io.out.valid := false.B
     for(i <-0 to n-1 by +1){
       when(io.in(i).valid){
@@ -736,7 +720,7 @@ class ArbiterVarTime[T <: Data](val gen: ExeUnitResp, val n: Int) (implicit p: P
   }
   //oldest is output of queue
   .otherwise{
-    io.out.valid := queue.io.deq.valid //io.deq.bits.uop.valid
+    io.out.valid := queue.io.deq.valid
     io.out.bits := queue.io.deq.bits
   }
 }
