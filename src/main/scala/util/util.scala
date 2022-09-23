@@ -658,62 +658,6 @@ object BoomCoreStringPrefix
 }
 
 /** -----------------------------------------------------------Edited-------------------------------------------------*/
-/**import boom.exu
-
-/**
- * Arbiter Control determining which producer has access
- */
-private object ArbiterCtrlVarTime {
-  def apply(request: ExeUnitResp): Seq[Bool] = {
-    request.map(_.valid).length match{
-      case 0 => Seq()
-      case 1 => Seq(true.B)
-      case _ => varTime(request)
-    }
-
-
-    /** true.B +: request.tail.init.scanLeft(request.head)(_ || _).map(!_) */
-  }
-
-
-  def varTime(request: ExeUnitResp): Seq[Bool] = {
-    //val newReq: Seq[Bool] = Seq.empty[bool]
-    val oldest = Seq()
-    oldest :+ request(request.length-1)
-    //find oldest in request
-    for (i <- 0 to request.length-1 by +1) {
-      if (IsOlder(request(i).uop.rob_idx, oldest(0).uop.rob_idx, rob.io.rob_head_idx)){
-        oldest +: request.slice(i,i)
-      }
-    }
-    //after loop oldest is oldest(0)
-    return oldest
-  }
-}
-
-/**
- *Arbiter with variable time execution
- *edited default case in Arbiterctl
- */
-class ArbiterVarTime[T <: Data](val gen: T, val n: Int) extends Module {
-  val io = IO(new ArbiterIO(gen, n))
-
-  io.chosen := (n - 1).asUInt
-  io.out.bits := io.in(n - 1).bits
-  for (i <- n - 2 to 0 by -1) {
-    when(io.in(i).valid) {
-      io.chosen := i.asUInt
-      io.out.bits := io.in(i).bits
-    }
-  }
-
-  val grant = ArbiterCtrlVarTime(io.in)
-  for ((in, g) <- io.in.zip(grant))
-    in.ready := g && io.out.ready
-  io.out.valid := !grant.last || io.in.last.valid
-}
-*/
-
 
 //########################
 class Queue[T <: boom.common.HasBoomUOP](gen: T, entries: Int, inputs: Int, flush_fn: boom.common.MicroOp => Bool = u => true.B, flow: Boolean = true)
@@ -735,7 +679,6 @@ class Queue[T <: boom.common.HasBoomUOP](gen: T, entries: Int, inputs: Int, flus
     val rob_head = Input(UInt(32.W))
   })
 
-  //val enqwire = WireInit(0.U)//Wire(UInt())
   //put oldest queue signal to out
   val oldest = RegInit(0.U)
 
@@ -766,7 +709,7 @@ class Queue[T <: boom.common.HasBoomUOP](gen: T, entries: Int, inputs: Int, flus
     do_enq(i) := io.enq(i).fire
   }
 
-  //enqwire := WireInit(0.U)
+
   val enqwire = VecInit(Seq.fill(inputs) {0.U})
   for(i <-1 until inputs){
     enqwire(i) := PopCount(do_enq.slice(0, i-1))
@@ -778,7 +721,6 @@ class Queue[T <: boom.common.HasBoomUOP](gen: T, entries: Int, inputs: Int, flus
       valids((enq_ptr.value + enqwire(i))%entries.asUInt)       := true.B //!IsKilledByBranch(io.brupdate, io.enq.bits.uop)
       uops((enq_ptr.value + enqwire(i))%entries.asUInt)         := io.enq(i).bits.uop
       uops((enq_ptr.value + enqwire(i))%entries.asUInt).br_mask := GetNewBrMask(io.brupdate, io.enq(i).bits.uop)
-      //enqwire = PopCount(do_enq(0), do_enq(i-1))
     }
   }
   enq_ptr.value := (enq_ptr.value + enqwire(inputs-1))%entries.asUInt
