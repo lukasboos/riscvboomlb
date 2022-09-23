@@ -126,9 +126,11 @@ class BoomCore(usingTrace: Boolean)(implicit p: Parameters) extends BoomModule
 
   // wb arbiter for the 0th ll writeback
   // TODO: should this be a multi-arb?
+  //edited
   val ll_wbarb         = Module(new ArbiterVarTime(new ExeUnitResp(xLen), 1 +
                                                                    (if (usingFPU) 1 else 0) +
                                                                    (if (usingRoCC) 1 else 0)))
+  //edited
   //val ll_wbarb         = Module(new Arbiter(new ExeUnitResp(xLen), 1 +
   //                                                                 (if (usingFPU) 1 else 0) +
   //                                                                 (if (usingRoCC) 1 else 0)))
